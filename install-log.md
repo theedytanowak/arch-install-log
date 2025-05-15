@@ -6,12 +6,10 @@
 `iwctl`
 `[iwd] device list`
 
-Found wlan0 but it was powered off.
-Tried:
+Found wlan0 but it was powered off. Tried:
 `[iwd] device wlan0 set-property Powered on`
 
-Got: "Operation failed"
-Fixed it by:
+Got: "Operation failed". Fixed it by:
 `[iwd] adapter phy0 set-property Powered on`
 `[iwd] device wlan0 set-property Powered on`
 
@@ -22,7 +20,7 @@ Then scanned for networks:
 Networks weren’t showing up at first. Restarted iwd:
 `systemctl restart iwd`
 
-Eventually networks appeared. Connected with:
+Eventually, networks appeared. Connected with:
 `iwctl wlan0 connect my_SSID`
 
 Confirmed connection:
