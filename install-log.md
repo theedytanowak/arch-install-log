@@ -1,3 +1,72 @@
+## 2025-05-15 – Initial Setup: WiFi + SSH Access
+
+### 1. Check available network devices
+
+```bash
+ip link
+```
+
+---
+
+### 2. Connect to WiFi (so I can SSH from my Mac)
+
+```bash
+iwctl
+[iwd] device list
+```
+
+Found `wlan0` but it was powered off.
+
+Tried:
+```bash
+[iwd] device wlan0 set-property Powered on
+```
+
+Got: `"Operation failed"`
+
+Fixed it by:
+```bash
+[iwd] adapter phy0 set-property Powered on
+[iwd] device wlan0 set-property Powered on
+```
+
+Scanned and connected:
+```bash
+[iwd] station wlan0 scan
+[iwd] station wlan0 get-networks
+systemctl restart iwd
+[iwd] station wlan0 connect my_SSID
+ping archlinux.org
+[iwd] station wlan0 show
+```
+
+→ **Status: Connected, IP assigned**
+
+---
+
+### 3. Set root password
+
+```bash
+passwd
+```
+
+---
+
+### 4. SSH from MacBook
+
+From Mac:
+```bash
+ssh root@<ARCH_IP_ADDRESS>
+```
+
+---
+
+### Notes
+- Restarting `iwd` helped with networks not showing.
+- Powering on the adapter *before* the device matters.
+- WiFi config is one of the most annoying parts of Arch setup. Got it working after trial & error.
+
+---
 ## 2025-05-16 – Disk Partitioning & Encrypting
 
 ### 1. Check the current disk partitioning
@@ -70,73 +139,3 @@ mount --mkdir /dev/sda1 /mnt/boot
 ```
 
 (I initially mounted the wrong partition: `/dev/sdb1`, then corrected it after verifying with `lsblk -f`.)
-
----
-
-## 2025-05-15 – Initial Setup: WiFi + SSH Access
-
-### 1. Check available network devices
-
-```bash
-ip link
-```
-
----
-
-### 2. Connect to WiFi (so I can SSH from my Mac)
-
-```bash
-iwctl
-[iwd] device list
-```
-
-Found `wlan0` but it was powered off.
-
-Tried:
-```bash
-[iwd] device wlan0 set-property Powered on
-```
-
-Got: `"Operation failed"`
-
-Fixed it by:
-```bash
-[iwd] adapter phy0 set-property Powered on
-[iwd] device wlan0 set-property Powered on
-```
-
-Scanned and connected:
-```bash
-[iwd] station wlan0 scan
-[iwd] station wlan0 get-networks
-systemctl restart iwd
-[iwd] station wlan0 connect my_SSID
-ping archlinux.org
-[iwd] station wlan0 show
-```
-
-→ **Status: Connected, IP assigned**
-
----
-
-### 3. Set root password
-
-```bash
-passwd
-```
-
----
-
-### 4. SSH from MacBook
-
-From Mac:
-```bash
-ssh root@<ARCH_IP_ADDRESS>
-```
-
----
-
-### Notes
-- Restarting `iwd` helped with networks not showing.
-- Powering on the adapter *before* the device matters.
-- WiFi config is one of the most annoying parts of Arch setup. Got it working after trial & error.
