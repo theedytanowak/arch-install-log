@@ -269,3 +269,245 @@ Installing lvm2 pulled in the missing pdata_tools binary, resolving the mkinitcp
 - First time I understood how LVM layers work: physical volume → volume group → logical volumes.
 - `cryptsetup open /dev/sda1` was a mistake I almost made – glad I double-checked the partition (`sda2` is for encryption).
 - `mkinitcpio` is required to bootstrap the kernel, unlock encryption, activate LVM, and mount the root filesystem.
+---
+
+## 2025-05-17 Bootloader & Failed reboot
+
+
+### 1. Installing systemd-boot - easy-to-configure UEFI boot manager
+
+SSH-ed back into the Arch system and chrooted into the installed environment.
+Initial install attempt:
+
+`bootctl install`
+
+Then I noticed an important note on the Arch Wiki:
+
+```text
+This section is out of date!
+Reason: When running in a PID namespace (as arch-chroot does), bootctl no longer creates the UEFI boot entry in NVRAM (since systemd v257).
+See: https://github.com/systemd/systemd/issues/36174
+```
+
+To fix this:
+
+1. **Exited the chroot**, then ran:
+   ```bash
+   bootctl --esp-path=/mnt/boot install
+   ```
+   This correctly wrote the EFI files and registered the boot entry on the actual ESP.
+
+2. **Chrooted back in**, and re-ran:
+   ```bash
+   bootctl install
+   ```
+   This ensures all config files (`loader.conf`, random seed, etc.) are created inside the real system.
+
+systemd-boot is now correctly installed and registered with UEFI.
+---
+
+### 2. Loader configuration
+
+Created `/boot/loader/entries/arch.conf`:
+
+```ini
+title   Arch Linux                       # Label shown in the boot menu
+linux   /vmlinuz-linux                   # Kernel image path (relative to /boot)
+initrd  /intel-ucode.img                 # Intel CPU microcode (must come before initramfs)
+initrd  /initramfs-linux.img             # Main initramfs image
+options cryptdevice=UUID=<luks-partition-uuid>:cryptlvm root=/dev/archvg/root rw
+```
+
+Explanation of the `options` line:
+
+- `cryptdevice=UUID=...:cryptlvm`: tells the initramfs to unlock the encrypted LUKS device at boot using the given UUID and map it to `/dev/mapper/cryptlvm`
+- `root=/dev/archvg/root`: specifies the logical volume to mount as the root filesystem
+- `rw`: mounts the root filesystem as read-write
+---
+
+### 3. Bootloader loader configuration
+
+Edited `/boot/loader/loader.conf` to define the default boot entry and timeout:
+
+```ini
+default arch              # Match the filename: /boot/loader/entries/arch.conf
+timeout 3                 # Show boot menu for 3 seconds
+editor no                 # Disable manual editing at boot (recommended)
+```
+
+This ensures systemd-boot loads the correct entry automatically and consistently.
+---
+
+### 4. User creation and sudo setup
+
+Created a regular user account:
+
+```bash
+useradd edyta
+```
+
+Realized I forgot `-m` (create home) and `-G wheel` (sudo group), so I manually fixed it:
+
+```bash
+mkdir -p /home/edyta
+chown edyta:edyta /home/edyta
+usermod -aG wheel edyta
+```
+
+Set the user password:
+
+```bash
+passwd edyta
+```
+
+Then configured sudo by editing the sudoers file using `visudo`:
+
+```bash
+visudo
+```
+
+Uncommented the following line to enable sudo for users in the `wheel` group:
+
+```text
+%wheel ALL=(ALL:ALL) ALL
+```
+---
+### 5. Root password setup
+
+Checked the root account status:
+
+```bash
+passwd -S root
+```
+
+Got:
+```text
+root L 2010-09-19 -1 -1 -1 -1
+```
+
+Realized the password was never set inside the chrooted system (only in the live environment). Fixed it:
+
+```bash
+passwd
+```
+
+Confirmed it's now active:
+
+```bash
+passwd -S root
+# root P 2025-05-17 -1 -1 -1 -1
+```
+---
+### 6. First reboot and boot failure
+
+Exited the chroot and prepared for reboot:
+
+```bash
+exit
+umount -R /mnt
+swapoff -a
+reboot
+```
+
+Removed the USB stick as the machine restarted.
+
+systemd-boot loaded and displayed the "Arch Linux" entry. Selected it.
+
+🛑 **Boot failed — system dropped into emergency shell.**
+
+No LUKS password prompt appeared. After a long delay, the following error was shown:
+
+```text
+Timed out waiting for device /dev/archvg/root.
+Dependency failed for Initrd Root Device.
+Dependency failed for /sysroot.
+Dependency failed for Initrd Root File System.
+```
+
+System entered emergency mode. Access was denied because the root account was locked.
+
+---
+
+### 7. Extensive Troubleshooting (unsuccessful)
+
+Many components of the setup were confirmed to be correct, including bootloader installation, UUID usage, and initramfs content. Despite this, the root volume could not be mounted because decryption never occurred.
+
+Booted back into the live ISO and attempted multiple rounds of troubleshooting:
+
+- ✅ Verified the `UUID` used in `arch.conf` matched `/dev/sda2`
+- ✅ Confirmed the `cryptdevice` mapping and `root=/dev/archvg/root` were correct
+- ✅ Inspected `/etc/mkinitcpio.conf` — confirmed presence of critical hooks:
+  ```bash
+  HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block sd-encrypt lvm2 filesystems fsck)
+  ```
+- ✅ Rebuilt initramfs multiple times using:
+  ```bash
+  mkinitcpio -P
+  ```
+- ✅ Re-ran both:
+  ```bash
+  bootctl --esp-path=/mnt/boot install
+  bootctl install
+  ```
+- ✅ Checked that `/boot/initramfs-linux.img` and `/boot/loader/entries/arch.conf` existed and were properly linked
+- ✅ Used `lsinitcpio` to confirm presence of `sd-encrypt` in the initramfs
+
+Despite all efforts, the system still failed to prompt for LUKS decryption and dropped into emergency mode due to inability to mount the root volume.
+
+---
+
+### 8. Lessons Learned & Next Attempt Checklist
+
+This installation attempt was ultimately unsuccessful, but produced valuable insight. Future attempts will apply the following rigorously:
+
+**Partitioning:**
+- `/dev/sda1` → EFI (FAT32, 1G)
+- `/dev/sda2` → LUKS container for LVM
+
+**Encryption and LVM setup:**
+```bash
+cryptsetup luksFormat /dev/sda2
+cryptsetup open /dev/sda2 cryptlvm
+pvcreate /dev/mapper/cryptlvm
+vgcreate archvg /dev/mapper/cryptlvm
+lvcreate -L 4G -n swap archvg
+lvcreate -L 40G -n root archvg
+lvcreate -l 100%FREE -n home archvg
+```
+
+**mkinitcpio config:**
+```bash
+HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block sd-encrypt lvm2 filesystems fsck)
+mkinitcpio -P
+```
+
+**systemd-boot install (must be done in this exact sequence):**
+```bash
+bootctl --esp-path=/mnt/boot install   # From live ISO
+arch-chroot /mnt
+bootctl install                         # Inside the chroot
+```
+
+**Correct `/boot/loader/entries/arch.conf`:**
+```ini
+title   Arch Linux
+linux   /vmlinuz-linux
+initrd  /intel-ucode.img
+initrd  /initramfs-linux.img
+options cryptdevice=UUID=<UUID-of-sda2>:cryptlvm root=/dev/archvg/root rw
+```
+
+Use `blkid /dev/sda2` to replace `<UUID>`.
+
+**Sanity checks before reboot:**
+```bash
+ls /boot/initramfs-linux.img
+ls /boot/loader/entries/arch.conf
+lsinitcpio /boot/initramfs-linux.img | grep sd-encrypt
+```
+
+If `sd-encrypt` is missing from the image, LUKS unlock will never be triggered.
+
+---
+
+Final result: The system was set up correctly in many ways, but boot failure confirmed a critical issue in the decryption pipeline. Will reattempt with lessons fully integrated.
