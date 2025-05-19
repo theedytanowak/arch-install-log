@@ -517,22 +517,22 @@ Final result: The system was set up correctly in many ways, but boot failure con
 
 ### 1. Prep-work
 
-- verified BIOS settings (UEFI, secure boot disabled)
-- downloaded newer Arch Linux iso
-- created bootable USB stick using balenaEtcher on the macbook
-- booted the live USB successfully
-- powered on network adapter and wlan0 device"
+- Verified BIOS settings (UEFI, Secure Boot disabled)
+- Downloaded latest Arch Linux ISO
+- Created a bootable USB using balenaEtcher on the MacBook
+- Booted into the live environment
+- Powered on the network adapter and wlan0 device:
 
 ```bash
 iwctl
-[iwd] device list
-[iwd] adapter phy0 set-property Powered on  # powered on adapter
-[iwd] device wlan0 set-property Powered on  # powered on 
+[iwd] adapter phy0 set-property Powered on
+[iwd] device wlan0 set-property Powered on
 [iwd] station wlan0 scan
 [iwd] station wlan0 connect my_SSID
 ```
 
-Got: `"Operation failed"`
+Got: "Operation failed"
+Fixed it:
 
 ```bash
 exit
@@ -554,69 +554,64 @@ iwctl station wlan0 connect my_SSID
 `iwctl station wlan0 show`
 ---
 
-### 2. Moving to macbook
+### 2. SSH from MacBook
 
-- Deleted previous known hosts lines referencing old connections with the same IP addresss
+- deleted outdated entries from known_hosts:
 
 `vim .ssh/known_hosts`
 
-- SSH-ed into the Arch
+- connected via SSH:
 
 `ssh root@192.168.x.x`
 
-- confirmed with just set live Arch root password
 ---
 
 ### 3. Update system clock
 
-- ensured the system clock is synchronized:
+- synced system clock:
 
 `timedaectl`
 ---
 
 ### 4. Partitioning & LVM setup
 
-- verified disk to work on:
+- verified correct disk:
 
 ```bash
 lsblk
 fdisk -l
 ```
 
-- opened the partitioning interface:
+- partitioned disk:
 
 `fdisk /dev/sda`
 
-- created a new empty GPT partition table
-- created EFI and LVM partitions:
+- created:
 
 ```text
-Device       Start       End   Sectors   Size Type
-/dev/sda1     2048   2099199   2097152     1G EFI System
-/dev/sda2  2099200 234440703 232341504 110.8G Linux LVM
+/dev/sda1 - EFI System (1G)
+/dev/sda2 - Linux LVM (rest of disk)
 ```
 
-- created a LUKS encrypted container on designated partition:
+- Encrypted LVM partition:
 
-`cryptsetup luksFormat /dev/sda2`
+```bash
+cryptsetup luksFormat /dev/sda2
+cryptsetup open /dev/sda2 cryptlvm
+```
 
-- set passphrase
-- opened the encrypted container with the passhrase:
-
-`cryptsetup open /dev/sda2 cryptlvm`
 ---
 
-### 5. Preparing logical volumes
+### 5. Logical Volumes
 
-- created a physical volume on top of the opened LUKS container:
+- initialized LVM:
 
-`pvcreate /dev/mapper/cryptlvm`
+```bash
+pvcreate /dev/mapper/cryptlvm
+vgcreate archvg /dev/mapper/cryptlvm
+```
 
-- created my volume group:
-
-`vgcreate archvg /dev/mapper/cryptlvm`
-
-- created logical volumes on the volume group (left 256MB for e2scrub:
+- created LVs (left 256MB for e2scrub):
 
 ```bash
 lvcreate -L 4G archvg -n swap
@@ -625,29 +620,24 @@ lvcreate -l 100%FREE archvg -n home
 lvreduce -L -256M archvg/home
 ```
 
-- formatted file systems on each logical volume:
+- formatted partitions:
 
 ```bash
 mkfs.ext4 /dev/archvg/root
 mkfs.ext4 /dev/archvg/home
 mkswap /dev/archvg/swap
+mkfs.fat -F32 /dev/sda1
 ```
 
-- prepared the efi/boot partition
-
-`mkfs.fat -F32 /dev/sda1`
-
-- mounted efi/boot partition to /mount/boot
-
-`mount --mkdir /dev/sda1 /mnt/boot`
-
-- mounted other lvm logical volumes:
+- mounted partitions:
 
 ```bash
 mount /dev/archvg/root /mnt
-
+mount --mkdir /dev/sda1 /mnt/boot
+swapon /dev/archvg/swap
 ```
-- ran `df -h` to verify the mounting points and didn't see /mnt/boot on the list. Probably because I mounted on `/mnt/boot` first and ten tried mounting on `/mnt`? Corrected that with:
+
+- fixed mount layering issue (EFI was mounted before root):
 
 ```bash
 umount /mnt
@@ -656,66 +646,60 @@ mount /dev/archvg/root /mnt
 mkdir -p /mnt/boot
 mount /dev/sda1 /mnt/boot
 ```
-
-- enabled swap volume:
-`swapon /dev/archvg/swap`
 ---
 
-### 6. Installing essential packages
+### 6. Base System Installation
 
-- Installed the base package:
+- Installed packages:
 
 ```bash
-pacstrap -K /mnt base base-devel linux linux-firmware git btrfs-progs grub efibootmgr grub-btrfs inotify-tools timeshift vim networkmanager pipewire pipewire-alsa pipewire-pulse pipewire-jack wireplumber reflector zsh zsh-completions zsh-autosuggestions openssh man sudo man-pages man-db texinfo lvm2 which  # add iwd next time
+pacstrap -K /mnt base base-devel linux linux-firmware git btrfs-progs grub efibootmgr grub-btrfs inotify-tools timeshift vim networkmanager pipewire pipewire-alsa pipewire-pulse pipewire-jack wireplumber reflector zsh zsh-completions zsh-autosuggestions openssh man sudo man-pages man-db texinfo lvm2 which
 ```
+(Reminder: add iwd in the future)
 ---
 
-### 7. Configure the system
+### 7. Configure the System
 
-- generated the fstab:
+- generated fstab:
 
 `genfstab -U /mnt >> /mnt/etc/fstab`
 
-- chrooted into the new system:
+- entered new system:
 
 `arch-chroot /mnt`
 
-- set the timezone and ran time clocks utility::
+- set timezone and clocks:
 
 ```bash
 ln -sf /usr/share/zoneinfo/Europe/Warsaw /etc/localtime
 hwclock --systohc
 ```
 
-- uncommented 'en_US.UTF-8 UTF-8' in /etc/locale.gen
-- generated locales:
+- edited locale:
 
-`locale-gen`
-
-- set the LANG variable to `LANG=en_US.UTF-8`:
-
-`vim /etc/locale.conf`
+```bash
+vim /etc/locale.gen  # uncommented en_US.UTF-8 UTF-8
+locale-gen
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
+```
 ---
 
 ### 8. Network config
 
-- created a hostname in `/etc/hostname`:
+- set hostname:
 
-`vim /etc/hostname`
+`echo "edyta-arch" > /etc/hostname`
 
-- enabled systemd network services:
+- enabled services:
 
 ```bash
 systemctl enable systemd-networkd.service
 systemctl enable systemd-resolved.service
 ```
-- configured wireless network:
-
-`vim /etc/systemd/network/25-wireless.network`
-
-- Pasted the following config:
+- configured wireless networking:
 
 ```ini
+# /etc/systemd/network/25-wireless.network
 [Match]
 Name=wlan0
 
@@ -724,7 +708,7 @@ DHCP=yes
 IgnoreCarrierLoss=3s
 ```
 
-- installed iwd to handle wireless authentication:
+- installed iwd:
 
 ```bash
 pacman -Syu iwd
@@ -732,22 +716,22 @@ systemctl enable iwd.service
 ```
 ---
 
-### 9. Configure mkinitcpio
+### 9. mkinitcpio
 
-- edited `/etc/mkinitcpio.conf` to have right hooks for systemd-based initramfs:
+- edited hooks:
 
 ```bash
 HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block sd-encrypt lvm2 filesystems fsck)
 ```
 
-- regenerated initramfs:
+- rebuilt initramfs:
 
 `mkinitcpio -P`
 ---
 
 ### 10. Bootloader
 
-- configured and installed the bootctl
+- installed systemd-boot:
 
 ```bash
 bootctl --esp-path=/mnt/boot install
@@ -755,35 +739,35 @@ arch-chroot /mnt
 bootctl install
 ```
 
-- checked /dev/sda2 UUID needed for the next step:
+- found UUID of encrypted device:
 
 `blkid /dev/sda2`
 
-- added configuration to `/boot/loader/entries/arch.conf` file:
+- created /boot/loader/entries/arch.conf:
 
 ```ini
 title   Arch Linux
 linux   /vmlinuz-linux
 initrd  /initramfs-linux.img
-options rd.luks.name=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx=cryptlvm root=/dev/archvg/root rw
+options rd.luks.name=<UUID>=cryptlvm root=/dev/archvg/root rw
 ```
 
-### 11. User creation and sudo setup
+### 11. User & Sudo
 
-- added user and managing groups:
+- Created user and added to wheel group:
 
 ```bash
 useradd edyta
 usermod -aG wheel edyta
 ```
 
-- enabled sudo access for wheel group
+- enabled sudo:
 
-`visudo`
-
-Uncommented `%wheel ALL=(ALL:ALL) ALL`
-
-- set new passwords for myself and root
+```bash
+visudo
+# uncommented `%wheel ALL=(ALL:ALL) ALL`
+```
+- set passwords:
 
 ```bash
 passwd edyta
@@ -792,4 +776,6 @@ passwd
 
 ### Results:
 
-System successfully booted. It's only 3:05 AM.
+System booted successfully into encrypted Arch install.
+
+Time check: 03:05 AM.
